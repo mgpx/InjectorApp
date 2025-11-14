@@ -121,6 +121,10 @@ namespace ChangeBgPayload
 
         private readonly uint _myPid = (uint)Process.GetCurrentProcess().Id;
 
+        // flag por thread: estamos processando mensagem de um TFRel?
+        [ThreadStatic]
+        private static bool s_inTFRelPaint;
+
         private void Log(string s)
         {
             try { System.IO.File.AppendAllText(@"C:\temp\payload_log.txt", DateTime.Now.ToString("s") + " " + s + Environment.NewLine); } catch { }
@@ -142,7 +146,7 @@ namespace ChangeBgPayload
                 GetClassName(cur, sb, sb.Capacity);
                 string cls = sb.ToString().ToUpperInvariant();
 
-                if (cls.Contains("TFREL"))
+                if (cls.StartsWith("TFREL"))
                     return true;
 
                 cur = GetParent(cur);
@@ -151,16 +155,29 @@ namespace ChangeBgPayload
             return false;
         }
 
-        // true se o HDC estiver ligado a algo dentro de TFRel (inclusive TStringGrid de relatório)
+        // true se NÃO devemos mexer nesse HDC
+        // - se estiver dentro de TFRel (flag de thread) -> ignora tudo
+        // - se o HDC pertencer a uma janela TFRel ou filho -> ignora
         private static bool ShouldIgnoreDc(IntPtr hdc)
         {
-            IntPtr hwnd = WindowFromDC(hdc);
-            if (hwnd == IntPtr.Zero) return false;
+            if (hdc == IntPtr.Zero)
+                return true;
 
+            // se estamos dentro do WndProc de TFRel nesta thread, ignora tudo
+            if (s_inTFRelPaint)
+                return true;
+
+            IntPtr hwnd = WindowFromDC(hdc);
+
+            // memory DC fora de TFRel: pode mexer
+            if (hwnd == IntPtr.Zero)
+                return false;
+
+            // se a janela associada está em TFRel, não mexe
             return IsInsideTFRelWindow(hwnd);
         }
 
-        // ===== Hook de GetSysColor =====
+        // ===== Hook de GetSysColor (cores muito claras -> bege) =====
         private const int COLOR_WINDOW = 5;
 
         [UnmanagedFunctionPointer(CallingConvention.StdCall, SetLastError = true)]
@@ -173,10 +190,17 @@ namespace ChangeBgPayload
         {
             try
             {
-                if (nIndex == COLOR_WINDOW)
-                    return s_color; // Bege no lugar do branco/clWindow
+                uint orig = _getSysColorOriginal(nIndex);
 
-                return _getSysColorOriginal(nIndex);
+                uint c = orig & 0x00FFFFFFu;
+                if (c == 0x00FFFFFFu || // branco puro
+                    c == 0x00FCFCFCu || // quase branco
+                    c == 0x00F0F0F0u)   // cinza muito claro
+                {
+                    return s_color;     // bege global
+                }
+
+                return orig;
             }
             catch
             {
@@ -195,7 +219,9 @@ namespace ChangeBgPayload
         {
             try
             {
-                // se estiver desenhando em algo de relatório (TFRel e filhos), não mexe
+                if (hdc == IntPtr.Zero)
+                    return _fillRectOriginal(hdc, ref lprc, hbr);
+
                 if (ShouldIgnoreDc(hdc))
                     return _fillRectOriginal(hdc, ref lprc, hbr);
 
@@ -235,6 +261,9 @@ namespace ChangeBgPayload
         {
             try
             {
+                if (hdc == IntPtr.Zero)
+                    return _setBkColorOriginal(hdc, crColor);
+
                 if (ShouldIgnoreDc(hdc))
                     return _setBkColorOriginal(hdc, crColor);
 
@@ -328,7 +357,7 @@ namespace ChangeBgPayload
                 Log("Falha ao instalar hook SetBkColor: " + ex);
             }
 
-            // Procura um form top-level e começa a subclassear (exceto TFRel)
+            // Procura um form top-level e começa a subclassear
             IntPtr first = WaitForTopLevelForm();
             if (first == IntPtr.Zero) { Log("Form não encontrado"); return; }
             HookTopLevel(first);
@@ -364,10 +393,8 @@ namespace ChangeBgPayload
                         string cls = GetCls(h).ToUpperInvariant();
 
                         if (cls == "TAPPLICATION") return true;
-                        // não hookar forms de relatório
-                        if (cls.StartsWith("TFREL")) return true;
 
-                        if (cls.StartsWith("TFORM") || cls.StartsWith("TFR") || cls.Contains("TFRINTERATIVO") || HasCaption(h))
+                        if (cls.StartsWith("TFORM") || cls.StartsWith("TFR") || cls.Contains("TFRINTERATIVO") || cls.StartsWith("TFREL") || HasCaption(h))
                             HookTopLevel(h);
                         return true;
                     }, IntPtr.Zero);
@@ -424,10 +451,7 @@ namespace ChangeBgPayload
                 string cls = GetCls(h).ToUpperInvariant();
                 if (cls == "TAPPLICATION") return true;
 
-                // ignora completamente forms de relatório
-                if (cls.StartsWith("TFREL")) return true;
-
-                if ((cls.StartsWith("TFORM") || cls.StartsWith("TFR") || cls.Contains("TFRINTERATIVO")) && HasCaption(h))
+                if ((cls.StartsWith("TFORM") || cls.StartsWith("TFR") || cls.Contains("TFRINTERATIVO") || cls.StartsWith("TFREL")) && HasCaption(h))
                 {
                     result = h;
                     return false;
@@ -500,9 +524,6 @@ namespace ChangeBgPayload
         private void HookTopLevel(IntPtr h)
         {
             if (!IsWindow(h) || _hookedTopLevels.Contains(h)) return;
-
-            // não hookar janelas top-level de relatório
-            if (IsInsideTFRelWindow(h)) return;
 
             _hookedTopLevels.Add(h);
             TrySubclass(h, false, true);
@@ -649,11 +670,24 @@ namespace ChangeBgPayload
             {
                 if (!IsWindow(h)) return IntPtr.Zero;
 
-                // se por algum motivo hookou algo dentro de TFRel, não altera nada
-                if (IsInsideTFRelWindow(h) && _oldProc.TryGetValue(h, out var oldRel))
-                    return CallWindowProc(oldRel, h, msg, w, l);
-
                 string cls = GetCls(h).ToUpperInvariant();
+                bool isTFRel = cls.StartsWith("TFREL");
+
+                // TFRel: não mexe em nada, só marca a flag de que estamos dentro dele
+                if (isTFRel && _oldProc.TryGetValue(h, out var oldRel))
+                {
+                    bool prev = s_inTFRelPaint;
+                    s_inTFRelPaint = true;
+                    try
+                    {
+                        return CallWindowProc(oldRel, h, msg, w, l);
+                    }
+                    finally
+                    {
+                        s_inTFRelPaint = prev;
+                    }
+                }
+
                 bool isTopLevel = _hookedTopLevels.Contains(h);
                 bool isMainPanel = (h == _mainPanel);
                 bool isEraseContainer = _eraseBgContainers.Any(c => cls.Contains(c));

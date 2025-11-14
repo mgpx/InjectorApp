@@ -6,20 +6,16 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
-
 namespace ChangeBgPayload
 {
     public class EntryPoint : IEntryPoint
     {
         public EntryPoint(RemoteHooking.IContext ctx, string ch) { }
-
-        // ===== WinAPI =====
-        private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+        // ===== WinAPI =====
+        private delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
         private delegate IntPtr WndProcDelegate(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
-
         [StructLayout(LayoutKind.Sequential)]
         private struct RECT { public int Left, Top, Right, Bottom; }
-
         [StructLayout(LayoutKind.Sequential)]
         private struct PAINTSTRUCT
         {
@@ -27,15 +23,13 @@ namespace ChangeBgPayload
             public int fRestore; public int fIncUpdate;
             public byte r1, r2, r3, r4, r5, r6, r7, r8;
         }
-
         [StructLayout(LayoutKind.Sequential)]
         private struct LOGBRUSH
         {
             public uint lbStyle;
-            public uint lbColor;    // COLORREF 0x00BBGGRR
-            public IntPtr lbHatch;
+            public uint lbColor; // COLORREF 0x00BBGGRR
+            public IntPtr lbHatch;
         }
-
         private const int GWL_WNDPROC = -4;
         private const int GCLP_HBRBACKGROUND = -10;
         private const int WS_CLIPCHILDREN = 0x02000000;
@@ -46,7 +40,6 @@ namespace ChangeBgPayload
         private const int TRANSPARENT = 1;
         private const int RGN_DIFF = 4;
         private const int GWL_STYLE = -16;
-
         [DllImport("user32.dll")] static extern bool EnumWindows(EnumWindowsProc cb, IntPtr l);
         [DllImport("user32.dll")] static extern bool EnumChildWindows(IntPtr p, EnumWindowsProc cb, IntPtr l);
         [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
@@ -74,333 +67,266 @@ namespace ChangeBgPayload
         [DllImport("gdi32.dll")] static extern uint SetBkColor(IntPtr hdc, uint crColor);
         [DllImport("user32.dll")] static extern IntPtr WindowFromDC(IntPtr hdc);
         [DllImport("user32.dll")] static extern IntPtr GetParent(IntPtr hWnd);
-
-        // Get/SetWindowLong compat
-        [DllImport("user32.dll", EntryPoint = "GetWindowLong")] static extern int GetWindowLong32(IntPtr h, int i);
+        // Get/SetWindowLong compat
+        [DllImport("user32.dll", EntryPoint = "GetWindowLong")] static extern int GetWindowLong32(IntPtr h, int i);
         [DllImport("user32.dll", EntryPoint = "GetWindowLongPtr")] static extern IntPtr GetWindowLongPtr64(IntPtr h, int i);
         [DllImport("user32.dll", EntryPoint = "SetWindowLong")] static extern int SetWindowLong32(IntPtr h, int i, int v);
         [DllImport("user32.dll", EntryPoint = "SetWindowLongPtr")] static extern IntPtr SetWindowLongPtr64(IntPtr h, int i, IntPtr v);
         [DllImport("user32.dll", EntryPoint = "SetClassLong")] static extern IntPtr SetClassLong32(IntPtr h, int i, IntPtr v);
         [DllImport("user32.dll", EntryPoint = "SetClassLongPtr")] static extern IntPtr SetClassLongPtr64(IntPtr h, int i, IntPtr v);
-
         static IntPtr GetWindowLongCompat(IntPtr h, int i)
-            => IntPtr.Size == 8 ? GetWindowLongPtr64(h, i) : new IntPtr(GetWindowLong32(h, i));
+        => IntPtr.Size == 8 ? GetWindowLongPtr64(h, i) : new IntPtr(GetWindowLong32(h, i));
         static IntPtr SetWindowLongCompat(IntPtr h, int i, IntPtr v)
-            => IntPtr.Size == 8 ? SetWindowLongPtr64(h, i, v) : new IntPtr(SetWindowLong32(h, i, v.ToInt32()));
+        => IntPtr.Size == 8 ? SetWindowLongPtr64(h, i, v) : new IntPtr(SetWindowLong32(h, i, v.ToInt32()));
         static IntPtr SetClassBrushCompat(IntPtr h, int i, IntPtr v)
-            => IntPtr.Size == 8 ? SetClassLongPtr64(h, i, v) : SetClassLong32(h, i, v);
-
-        // ===== Estado geral =====
-        private static uint s_color = 0xFFF5E6; // COLORREF 0x00BBGGRR (begezinho)
-        private static IntPtr s_brush = IntPtr.Zero;
+        => IntPtr.Size == 8 ? SetClassLongPtr64(h, i, v) : SetClassLong32(h, i, v);
+        // ===== Estado geral =====
+        private static uint s_color = 0xFFF5E6; // COLORREF 0x00BBGGRR (begezinho)
+        private static IntPtr s_brush = IntPtr.Zero;
         private static int s_bevelWidth = 2;
-
         private IntPtr _mainPanel = IntPtr.Zero;
-
         private readonly HashSet<IntPtr> _hookedTopLevels = new HashSet<IntPtr>();
         private readonly Dictionary<IntPtr, WndProcDelegate> _delegates = new Dictionary<IntPtr, WndProcDelegate>();
         private readonly Dictionary<IntPtr, IntPtr> _oldProc = new Dictionary<IntPtr, IntPtr>();
         private readonly HashSet<IntPtr> _classBrushApplied = new HashSet<IntPtr>();
-
-        // Containers que pintam fundo no WM_ERASEBKGND
-        private readonly string[] _eraseBgContainers = {
-            "TPANEL",
-            "TSCROLLBOX",
-            "TFRAME",
-            "TTABSHEET",
-            "TGROUPBOX",
-            "TPAGECONTROL",
-            "TSQLPANELGRID" // painéis da TSQLGrid
-        };
-
+        // Containers que pintam fundo no WM_ERASEBKGND
+        private readonly string[] _eraseBgContainers = {
+"TPANEL",
+"TSCROLLBOX",
+"TFRAME",
+"TTABSHEET",
+"TGROUPBOX",
+"TPAGECONTROL",
+"TSQLPANELGRID" // painéis da TSQLGrid
+        };
         private readonly string[] _blacklist = {
-            "TEDIT", "TBUTTON", "TCHECKBOX", "TRADIOBUTTON",
-            "TLISTVIEW", "TCOMBOBOX", "TMEMO", "TLISTBOX",
-            "TSPEEDBUTTON", "TTOOLBAR", "TSTATUSBAR", "TMAINMENU"
-        };
-
+"TEDIT", "TBUTTON", "TCHECKBOX", "TRADIOBUTTON",
+"TLISTVIEW", "TCOMBOBOX", "TMEMO", "TLISTBOX",
+"TSPEEDBUTTON", "TTOOLBAR", "TSTATUSBAR", "TMAINMENU"
+};
         private readonly uint _myPid = (uint)Process.GetCurrentProcess().Id;
-
-        // flag por thread: estamos processando mensagem de um TFRel?
-        [ThreadStatic]
+        // flag por thread: estamos processando mensagem de um TFRel?
+        [ThreadStatic]
         private static bool s_inTFRelPaint;
 
+        private static volatile bool s_bypassWhenTFRelOpen = false;
         private void Log(string s)
         {
             try { System.IO.File.AppendAllText(@"C:\temp\payload_log.txt", DateTime.Now.ToString("s") + " " + s + Environment.NewLine); } catch { }
         }
-
-        // ===== helpers de TFRel / região a ignorar =====
-
-        // true se o HWND (ou algum pai) for TFRel
-        private static bool IsInsideTFRelWindow(IntPtr hwnd)
+        // ===== helpers de TFRel / região a ignorar =====
+        // true se o HWND (ou algum pai) for TFRel
+        private static bool IsInsideTFRelWindow(IntPtr hwnd)
         {
             if (hwnd == IntPtr.Zero) return false;
-
             var sb = new StringBuilder(128);
             IntPtr cur = hwnd;
-
             while (cur != IntPtr.Zero)
             {
                 sb.Clear();
                 GetClassName(cur, sb, sb.Capacity);
                 string cls = sb.ToString().ToUpperInvariant();
-
                 if (cls.StartsWith("TFREL"))
                     return true;
-
                 cur = GetParent(cur);
             }
-
             return false;
         }
-
-        // true se NÃO devemos mexer nesse HDC
-        // - se estiver dentro de TFRel (flag de thread) -> ignora tudo
-        // - se o HDC pertencer a uma janela TFRel ou filho -> ignora
-        private static bool ShouldIgnoreDc(IntPtr hdc)
+        // true se NÃO devemos mexer nesse HDC
+        // - se estiver dentro de TFRel (flag de thread) -> ignora tudo
+        // - se o HDC pertencer a uma janela TFRel ou filho -> ignora
+        private static bool ShouldIgnoreDc(IntPtr hdc)
         {
             if (hdc == IntPtr.Zero)
                 return true;
-
-            // se estamos dentro do WndProc de TFRel nesta thread, ignora tudo
-            if (s_inTFRelPaint)
+            // se estamos dentro do WndProc de TFRel nesta thread, ignora tudo
+            if (s_inTFRelPaint)
                 return true;
-
             IntPtr hwnd = WindowFromDC(hdc);
-
-            // memory DC fora de TFRel: pode mexer
-            if (hwnd == IntPtr.Zero)
+            // memory DC fora de TFRel: pode mexer
+            if (hwnd == IntPtr.Zero)
                 return false;
-
-            // se a janela associada está em TFRel, não mexe
-            return IsInsideTFRelWindow(hwnd);
+            // se a janela associada está em TFRel, não mexe
+            return IsInsideTFRelWindow(hwnd);
         }
-
-        // ===== Hook de GetSysColor (cores muito claras -> bege) =====
-        private const int COLOR_WINDOW = 5;
-
+        // ===== Hook de GetSysColor (cores muito claras -> bege) =====
+        private const int COLOR_WINDOW = 5;
         [UnmanagedFunctionPointer(CallingConvention.StdCall, SetLastError = true)]
         private delegate uint GetSysColorDelegate(int nIndex);
-
         private static GetSysColorDelegate _getSysColorOriginal;
         private static LocalHook _getSysColorHook;
-
         private static uint GetSysColor_Hooked(int nIndex)
         {
+            if (s_bypassWhenTFRelOpen)
+                return _getSysColorOriginal(nIndex);
+
             try
             {
                 uint orig = _getSysColorOriginal(nIndex);
-
                 uint c = orig & 0x00FFFFFFu;
-                if (c == 0x00FFFFFFu || // branco puro
-                    c == 0x00FCFCFCu || // quase branco
-                    c == 0x00F0F0F0u)   // cinza muito claro
-                {
-                    return s_color;     // bege global
-                }
-
+                if (c == 0x00FFFFFFu || c == 0x00FCFCFCu || c == 0x00F0F0F0u)
+                    return s_color;
                 return orig;
             }
-            catch
-            {
-                return _getSysColorOriginal(nIndex);
-            }
+            catch { return _getSysColorOriginal(nIndex); }
         }
-
-        // ===== Hook de FillRect (branco -> bege, exceto TFRel) =====
-        [UnmanagedFunctionPointer(CallingConvention.StdCall, SetLastError = true)]
+        // ===== Hook de FillRect (branco -> bege, exceto TFRel) =====
+        [UnmanagedFunctionPointer(CallingConvention.StdCall, SetLastError = true)]
         private delegate int FillRectDelegate(IntPtr hdc, ref RECT lprc, IntPtr hbr);
-
         private static FillRectDelegate _fillRectOriginal;
         private static LocalHook _fillRectHook;
-
         private static int FillRect_Hooked(IntPtr hdc, ref RECT lprc, IntPtr hbr)
         {
+            if (s_bypassWhenTFRelOpen)
+                return _fillRectOriginal(hdc, ref lprc, hbr);
+
             try
             {
-                if (hdc == IntPtr.Zero)
-                    return _fillRectOriginal(hdc, ref lprc, hbr);
-
-                if (ShouldIgnoreDc(hdc))
-                    return _fillRectOriginal(hdc, ref lprc, hbr);
-
                 if (hbr != IntPtr.Zero)
                 {
-                    LOGBRUSH lb;
-                    if (GetObject(hbr, Marshal.SizeOf(typeof(LOGBRUSH)), out lb) != 0)
+                    if (GetObject(hbr, Marshal.SizeOf<LOGBRUSH>(), out LOGBRUSH lb) != 0)
                     {
                         uint color = lb.lbColor & 0x00FFFFFFu;
-
-                        // troca branco / quase branco pelo bege global
-                        if (color == 0x00FFFFFFu   // branco
-                            || color == 0x00FCFCFCu
-                            || color == 0x00F0F0F0u)
-                        {
+                        if (color == 0x00FFFFFFu || color == 0x00FCFCFCu || color == 0x00F0F0F0u)
                             return _fillRectOriginal(hdc, ref lprc, s_brush);
-                        }
                     }
                 }
             }
-            catch
-            {
-                // Se algo der errado, deixa o original tocar
-            }
-
+            catch { }
             return _fillRectOriginal(hdc, ref lprc, hbr);
         }
-
-        // ===== Hook de SetBkColor (branco -> bege, exceto TFRel) =====
-        [UnmanagedFunctionPointer(CallingConvention.StdCall, SetLastError = true)]
+        // ===== Hook de SetBkColor (branco -> bege, exceto TFRel) =====
+        [UnmanagedFunctionPointer(CallingConvention.StdCall, SetLastError = true)]
         private delegate uint SetBkColorDelegate(IntPtr hdc, uint crColor);
-
         private static SetBkColorDelegate _setBkColorOriginal;
         private static LocalHook _setBkColorHook;
-
         private static uint SetBkColor_Hooked(IntPtr hdc, uint crColor)
         {
+            if (s_bypassWhenTFRelOpen)
+                return _setBkColorOriginal(hdc, crColor);
+
             try
             {
-                if (hdc == IntPtr.Zero)
-                    return _setBkColorOriginal(hdc, crColor);
-
-                if (ShouldIgnoreDc(hdc))
-                    return _setBkColorOriginal(hdc, crColor);
-
                 uint c = crColor & 0x00FFFFFFu;
                 if (c == 0x00FFFFFFu || c == 0x00FCFCFCu || c == 0x00F0F0F0u)
-                {
-                    crColor = s_color; // força fundo bege
-                }
+                    crColor = s_color;
             }
-            catch
-            {
-                // ignora erros
-            }
-
+            catch { }
             return _setBkColorOriginal(hdc, crColor);
         }
-
-        // ===== EntryPoint principal =====
-        public void Run(RemoteHooking.IContext ctx, string ch)
+        // ===== EntryPoint principal =====
+        public void Run(RemoteHooking.IContext ctx, string ch)
         {
             Log("Payload iniciado");
-
-            // Carrega cor inicial do arquivo, se existir
-            uint? init = TryGetColorFromFile();
+            // Carrega cor inicial do arquivo, se existir
+            uint? init = TryGetColorFromFile();
             if (init.HasValue) s_color = init.Value;
             s_brush = CreateSolidBrush(s_color);
-
-            // Hook GetSysColor
-            try
+            // Hook GetSysColor
+            try
             {
                 IntPtr addr = LocalHook.GetProcAddress("user32.dll", "GetSysColor");
-
                 _getSysColorOriginal = (GetSysColorDelegate)
-                    Marshal.GetDelegateForFunctionPointer(addr, typeof(GetSysColorDelegate));
-
+                Marshal.GetDelegateForFunctionPointer(addr, typeof(GetSysColorDelegate));
                 _getSysColorHook = LocalHook.Create(
-                    addr,
-                    new GetSysColorDelegate(GetSysColor_Hooked),
-                    null);
-
+                addr,
+                new GetSysColorDelegate(GetSysColor_Hooked),
+                null);
                 _getSysColorHook.ThreadACL.SetExclusiveACL(new int[] { 0 });
-
                 Log("Hook GetSysColor instalado com sucesso");
             }
             catch (Exception ex)
             {
                 Log("Falha ao instalar hook GetSysColor: " + ex);
             }
-
-            // Hook FillRect
-            try
+            // Hook FillRect
+            try
             {
                 IntPtr addr = LocalHook.GetProcAddress("user32.dll", "FillRect");
-
                 _fillRectOriginal = (FillRectDelegate)
-                    Marshal.GetDelegateForFunctionPointer(addr, typeof(FillRectDelegate));
-
+                Marshal.GetDelegateForFunctionPointer(addr, typeof(FillRectDelegate));
                 _fillRectHook = LocalHook.Create(
-                    addr,
-                    new FillRectDelegate(FillRect_Hooked),
-                    null);
-
+                addr,
+                new FillRectDelegate(FillRect_Hooked),
+                null);
                 _fillRectHook.ThreadACL.SetExclusiveACL(new int[] { 0 });
-
                 Log("Hook FillRect instalado com sucesso");
             }
             catch (Exception ex)
             {
                 Log("Falha ao instalar hook FillRect: " + ex);
             }
-
-            // Hook SetBkColor
-            try
+            // Hook SetBkColor
+            try
             {
                 IntPtr addr = LocalHook.GetProcAddress("gdi32.dll", "SetBkColor");
-
                 _setBkColorOriginal = (SetBkColorDelegate)
-                    Marshal.GetDelegateForFunctionPointer(addr, typeof(SetBkColorDelegate));
-
+                Marshal.GetDelegateForFunctionPointer(addr, typeof(SetBkColorDelegate));
                 _setBkColorHook = LocalHook.Create(
-                    addr,
-                    new SetBkColorDelegate(SetBkColor_Hooked),
-                    null);
-
+                addr,
+                new SetBkColorDelegate(SetBkColor_Hooked),
+                null);
                 _setBkColorHook.ThreadACL.SetExclusiveACL(new int[] { 0 });
-
                 Log("Hook SetBkColor instalado com sucesso");
             }
             catch (Exception ex)
             {
                 Log("Falha ao instalar hook SetBkColor: " + ex);
             }
-
-            // Procura um form top-level e começa a subclassear
-            IntPtr first = WaitForTopLevelForm();
+            // Procura um form top-level e começa a subclassear
+            IntPtr first = WaitForTopLevelForm();
             if (first == IntPtr.Zero) { Log("Form não encontrado"); return; }
             HookTopLevel(first);
-
             int cycle = 0;
             while (true)
             {
                 try
                 {
                     cycle++;
-
-                    // Recarrega cor de arquivo, se mudar em tempo de execução
-                    uint? newColor = TryGetColorFromFile();
+                    // Recarrega cor de arquivo, se mudar em tempo de execução
+                    uint? newColor = TryGetColorFromFile();
                     if (newColor.HasValue && newColor.Value != s_color)
                     {
                         Log($"COR ALTERADA → {newColor:X6}");
                         s_color = newColor.Value;
-
                         if (s_brush != IntPtr.Zero) DeleteObject(s_brush);
                         s_brush = CreateSolidBrush(s_color);
-
                         _classBrushApplied.Clear();
                         foreach (var f in _hookedTopLevels.Where(IsWindow))
                             InvalidateRect(f, IntPtr.Zero, true);
                     }
-
                     // Descobre novas janelas top-level do mesmo processo
+                    // <<< DETECÇÃO DE TFRel ABERTO (nova parte) >>>
+                    bool temTFRelAberto = false;
                     EnumWindows((h, _) =>
                     {
-                        if (!IsWindow(h)) return true;
+                        if (!IsWindowVisible(h)) return true;
                         GetWindowThreadProcessId(h, out uint pid);
-                        if (pid != _myPid || !IsWindowVisible(h) || _hookedTopLevels.Contains(h)) return true;
+                        if (pid != _myPid) return true;
+
                         string cls = GetCls(h).ToUpperInvariant();
-
-                        if (cls == "TAPPLICATION") return true;
-
-                        if (cls.StartsWith("TFORM") || cls.StartsWith("TFR") || cls.Contains("TFRINTERATIVO") || cls.StartsWith("TFREL") || HasCaption(h))
-                            HookTopLevel(h);
+                        if (cls.Contains("FREL")) // cobre TFRel, TfrPreview, TFRelPreview, etc.
+                        {
+                            temTFRelAberto = true;
+                            return false;
+                        }
                         return true;
                     }, IntPtr.Zero);
 
-                    // Descobre e atualiza o "main panel" maior
-                    if (cycle % 6 == 0)
+                    if (temTFRelAberto != s_bypassWhenTFRelOpen)
+                    {
+                        s_bypassWhenTFRelOpen = temTFRelAberto;
+                        Log(temTFRelAberto ? "TFRel aberto → bypass total ativado" : "TFRel fechado → bege volta ao normal");
+
+                        if (!temTFRelAberto)
+                        {
+                            // repinta tudo com bege quando fecha o relatório
+                            foreach (var root in _hookedTopLevels.Where(IsWindow))
+                                InvalidateRect(root, IntPtr.Zero, true);
+                        }
+                    }
+                    // Descobre e atualiza o "main panel" maior
+                    if (cycle % 6 == 0)
                     {
                         IntPtr cand = FindLargestPanel();
                         if (cand != IntPtr.Zero && cand != _mainPanel)
@@ -410,9 +336,8 @@ namespace ChangeBgPayload
                             if (IsWindow(_mainPanel)) InvalidateRect(_mainPanel, IntPtr.Zero, true);
                         }
                     }
-
-                    // Varre hierarquia para subclassear containers e aplicar brush
-                    foreach (var root in _hookedTopLevels.ToList())
+                    // Varre hierarquia para subclassear containers e aplicar brush
+                    foreach (var root in _hookedTopLevels.ToList())
                     {
                         if (IsWindow(root))
                         {
@@ -426,9 +351,8 @@ namespace ChangeBgPayload
                 Thread.Sleep(800);
             }
         }
-
-        // ====================== FUNÇÕES AUXILIARES ======================
-        private IntPtr WaitForTopLevelForm(int timeoutMs = 20000)
+        // ====================== FUNÇÕES AUXILIARES ======================
+        private IntPtr WaitForTopLevelForm(int timeoutMs = 20000)
         {
             var sw = Stopwatch.StartNew();
             while (sw.ElapsedMilliseconds < timeoutMs)
@@ -439,7 +363,6 @@ namespace ChangeBgPayload
             }
             return FindTopLevelFormOnce(_myPid);
         }
-
         private IntPtr FindTopLevelFormOnce(uint pid)
         {
             IntPtr result = IntPtr.Zero;
@@ -450,7 +373,6 @@ namespace ChangeBgPayload
                 if (p != pid) return true;
                 string cls = GetCls(h).ToUpperInvariant();
                 if (cls == "TAPPLICATION") return true;
-
                 if ((cls.StartsWith("TFORM") || cls.StartsWith("TFR") || cls.Contains("TFRINTERATIVO") || cls.StartsWith("TFREL")) && HasCaption(h))
                 {
                     result = h;
@@ -460,20 +382,17 @@ namespace ChangeBgPayload
             }, IntPtr.Zero);
             return result;
         }
-
         private bool HasCaption(IntPtr h)
         {
             var sb = new StringBuilder(256);
             return GetWindowText(h, sb, sb.Capacity) > 0;
         }
-
         private string GetCls(IntPtr h)
         {
             var sb = new StringBuilder(128);
             GetClassName(h, sb, sb.Capacity);
             return sb.ToString();
         }
-
         private uint? TryGetColorFromFile()
         {
             try
@@ -488,12 +407,11 @@ namespace ChangeBgPayload
                     int g = Convert.ToInt32(t.Substring(2, 2), 16);
                     int b = Convert.ToInt32(t.Substring(4, 2), 16);
                     return (uint)(r | (g << 8) | (b << 16)); // COLORREF 0x00BBGGRR
-                }
+                }
             }
             catch { }
             return null;
         }
-
         private IntPtr FindLargestPanel()
         {
             IntPtr largest = IntPtr.Zero;
@@ -520,17 +438,14 @@ namespace ChangeBgPayload
             }
             return largest;
         }
-
         private void HookTopLevel(IntPtr h)
         {
             if (!IsWindow(h) || _hookedTopLevels.Contains(h)) return;
-
             _hookedTopLevels.Add(h);
             TrySubclass(h, false, true);
             TrySetClassBrushOnce(h);
             Log($"Hooked top-level 0x{h.ToInt64():X} {GetCls(h)}");
         }
-
         private void ScanAndHookAllFrom(IntPtr root)
         {
             if (!IsWindow(root)) return;
@@ -541,37 +456,29 @@ namespace ChangeBgPayload
                 return true;
             }, IntPtr.Zero);
         }
-
         private void TryHookContainer(IntPtr h)
         {
             if (!IsWindow(h) || !IsWindowVisible(h)) return;
-
-            // se esse controle estiver dentro de um TFRel, não mexe
-            if (IsInsideTFRelWindow(h)) return;
-
+            // se esse controle estiver dentro de um TFRel, não mexe
+            if (IsInsideTFRelWindow(h)) return;
             string cls = GetCls(h).ToUpperInvariant();
             if (_blacklist.Any(b => cls.Contains(b))) return;
             if (!_eraseBgContainers.Any(c => cls.Contains(c))) return;
-
             TrySubclass(h, true, false);
             EnsureClipChildren(h);
             TrySetClassBrushOnce(h);
         }
-
         private void TrySubclass(IntPtr h, bool isContainer, bool isMain)
         {
             if (_oldProc.ContainsKey(h) || !IsWindow(h)) return;
-
             var del = new WndProcDelegate(HookedProc);
             IntPtr ptr = Marshal.GetFunctionPointerForDelegate(del);
             IntPtr old = SetWindowLongCompat(h, GWL_WNDPROC, ptr);
             if (old == IntPtr.Zero) return;
-
             _delegates[h] = del;
             _oldProc[h] = old;
             InvalidateRect(h, IntPtr.Zero, true);
         }
-
         private void EnsureClipChildren(IntPtr h)
         {
             if (!IsWindow(h)) return;
@@ -583,14 +490,11 @@ namespace ChangeBgPayload
             }
             catch { }
         }
-
         private void TrySetClassBrushOnce(IntPtr h)
         {
             if (_classBrushApplied.Contains(h) || !IsWindow(h)) return;
-
-            // não trocar brush de nada que esteja em TFRel
-            if (IsInsideTFRelWindow(h)) return;
-
+            // não trocar brush de nada que esteja em TFRel
+            if (IsInsideTFRelWindow(h)) return;
             try
             {
                 SetClassBrushCompat(h, GCLP_HBRBACKGROUND, s_brush);
@@ -598,9 +502,8 @@ namespace ChangeBgPayload
             }
             catch { }
         }
-
-        // ===== Pintura =====
-        private void PaintFormErase(IntPtr h, IntPtr dcParam)
+        // ===== Pintura =====
+        private void PaintFormErase(IntPtr h, IntPtr dcParam)
         {
             IntPtr hdc = dcParam != IntPtr.Zero ? dcParam : GetDC(h);
             bool created = dcParam == IntPtr.Zero;
@@ -608,14 +511,12 @@ namespace ChangeBgPayload
             FillRect(hdc, ref rc, s_brush);
             if (created) ReleaseDC(h, hdc);
         }
-
         private void PaintEraseExcludingChildren(IntPtr h, IntPtr dcParam)
         {
             IntPtr hdc = dcParam != IntPtr.Zero ? dcParam : GetDC(h);
             bool created = dcParam == IntPtr.Zero;
             GetClientRect(h, out RECT rc);
             IntPtr rgn = CreateRectRgn(rc.Left, rc.Top, rc.Right, rc.Bottom);
-
             EnumChildWindows(h, (child, _) =>
             {
                 if (!IsWindowVisible(child)) return true;
@@ -626,14 +527,12 @@ namespace ChangeBgPayload
                 DeleteObject(rgnChild);
                 return true;
             }, IntPtr.Zero);
-
             SelectClipRgn(hdc, rgn);
             FillRect(hdc, ref rc, s_brush);
             SelectClipRgn(hdc, IntPtr.Zero);
             DeleteObject(rgn);
             if (created) ReleaseDC(h, hdc);
         }
-
         private void PaintMainPanelPost(IntPtr h, IntPtr hdc)
         {
             GetClientRect(h, out RECT rc);
@@ -643,9 +542,7 @@ namespace ChangeBgPayload
             inner.Right -= s_bevelWidth;
             inner.Bottom -= s_bevelWidth;
             if (inner.Left >= inner.Right || inner.Top >= inner.Bottom) return;
-
             IntPtr rgn = CreateRectRgn(inner.Left, inner.Top, inner.Right, inner.Bottom);
-
             EnumChildWindows(h, (child, _) =>
             {
                 if (!IsWindowVisible(child)) return true;
@@ -656,25 +553,24 @@ namespace ChangeBgPayload
                 DeleteObject(rgnChild);
                 return true;
             }, IntPtr.Zero);
-
             SelectClipRgn(hdc, rgn);
             FillRect(hdc, ref inner, s_brush);
             SelectClipRgn(hdc, IntPtr.Zero);
             DeleteObject(rgn);
         }
-
-        // ===== WndProc =====
-        private IntPtr HookedProc(IntPtr h, uint msg, IntPtr w, IntPtr l)
+        // ===== WndProc =====
+        private IntPtr HookedProc(IntPtr h, uint msg, IntPtr w, IntPtr l)
         {
             try
             {
-                if (!IsWindow(h)) return IntPtr.Zero;
+                if (s_bypassWhenTFRelOpen && _oldProc.TryGetValue(h, out var old))
+                    return CallWindowProc(old, h, msg, w, l);
 
+                if (!IsWindow(h)) return IntPtr.Zero;
                 string cls = GetCls(h).ToUpperInvariant();
                 bool isTFRel = cls.StartsWith("TFREL");
-
-                // TFRel: não mexe em nada, só marca a flag de que estamos dentro dele
-                if (isTFRel && _oldProc.TryGetValue(h, out var oldRel))
+                // TFRel: não mexe em nada, só marca a flag de que estamos dentro dele
+                if (isTFRel && _oldProc.TryGetValue(h, out var oldRel))
                 {
                     bool prev = s_inTFRelPaint;
                     s_inTFRelPaint = true;
@@ -687,21 +583,17 @@ namespace ChangeBgPayload
                         s_inTFRelPaint = prev;
                     }
                 }
-
                 bool isTopLevel = _hookedTopLevels.Contains(h);
                 bool isMainPanel = (h == _mainPanel);
                 bool isEraseContainer = _eraseBgContainers.Any(c => cls.Contains(c));
-
                 if (isTopLevel && msg == WM_ERASEBKGND)
                 {
                     PaintFormErase(h, w);
                     return (IntPtr)1;
                 }
-
                 if (isMainPanel)
                 {
                     if (msg == WM_ERASEBKGND) return (IntPtr)1;
-
                     if (msg == WM_PAINT)
                     {
                         PAINTSTRUCT ps;
@@ -721,16 +613,13 @@ namespace ChangeBgPayload
                     PaintEraseExcludingChildren(h, w);
                     return (IntPtr)1;
                 }
-
                 if (msg == WM_CTLCOLORSTATIC || msg == WM_CTLCOLORDLG)
                 {
                     SetBkMode(w, TRANSPARENT);
                     return s_brush;
                 }
-
-                if (_oldProc.TryGetValue(h, out var old))
-                    return CallWindowProc(old, h, msg, w, l);
-
+                if (_oldProc.TryGetValue(h, out var old2))
+                    return CallWindowProc(old2, h, msg, w, l);
                 return IntPtr.Zero;
             }
             catch (Exception ex)

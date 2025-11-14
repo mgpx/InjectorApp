@@ -80,6 +80,10 @@ namespace InjectorApp.Win
                 Interval = 4000 // 4 segundos
             };
             _timer.Tick += Timer_Tick;
+
+
+            //Ao abrir já iniciar o monitoramento
+            StartMonitoring();
         }
 
         private void OnStartClicked(object sender, EventArgs e)

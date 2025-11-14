@@ -72,6 +72,8 @@ namespace ChangeBgPayload
         [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr obj);
         [DllImport("gdi32.dll")] static extern int GetObject(IntPtr hgdiobj, int cbBuffer, out LOGBRUSH lpvObject);
         [DllImport("gdi32.dll")] static extern uint SetBkColor(IntPtr hdc, uint crColor);
+        [DllImport("user32.dll")] static extern IntPtr WindowFromDC(IntPtr hdc);
+        [DllImport("user32.dll")] static extern IntPtr GetParent(IntPtr hWnd);
 
         // Get/SetWindowLong compat
         [DllImport("user32.dll", EntryPoint = "GetWindowLong")] static extern int GetWindowLong32(IntPtr h, int i);
@@ -101,7 +103,6 @@ namespace ChangeBgPayload
         private readonly HashSet<IntPtr> _classBrushApplied = new HashSet<IntPtr>();
 
         // Containers que pintam fundo no WM_ERASEBKGND
-        // IMPORTANTE: inclui TSQLPANELGRID; NÃO inclui TSQLGRID
         private readonly string[] _eraseBgContainers = {
             "TPANEL",
             "TSCROLLBOX",
@@ -109,7 +110,7 @@ namespace ChangeBgPayload
             "TTABSHEET",
             "TGROUPBOX",
             "TPAGECONTROL",
-            "TSQLPANELGRID"
+            "TSQLPANELGRID" // painéis da TSQLGrid
         };
 
         private readonly string[] _blacklist = {
@@ -123,6 +124,30 @@ namespace ChangeBgPayload
         private void Log(string s)
         {
             try { System.IO.File.AppendAllText(@"C:\temp\payload_log.txt", DateTime.Now.ToString("s") + " " + s + Environment.NewLine); } catch { }
+        }
+
+        // ===== helpers pra descobrir TStringGrid =====
+        private static bool IsInsideTStringGrid(IntPtr hdc)
+        {
+            IntPtr hwnd = WindowFromDC(hdc);
+            if (hwnd == IntPtr.Zero) return false;
+
+            var sb = new StringBuilder(128);
+            IntPtr cur = hwnd;
+
+            while (cur != IntPtr.Zero)
+            {
+                sb.Clear();
+                GetClassName(cur, sb, sb.Capacity);
+                string cls = sb.ToString().ToUpperInvariant();
+
+                if (cls.Contains("TSTRINGGRID"))
+                    return true;
+
+                cur = GetParent(cur);
+            }
+
+            return false;
         }
 
         // ===== Hook de GetSysColor =====
@@ -149,18 +174,21 @@ namespace ChangeBgPayload
             }
         }
 
-        // ===== Hook de FillRect (branco -> bege globalmente) =====
+        // ===== Hook de FillRect (branco -> bege, exceto TStringGrid) =====
         [UnmanagedFunctionPointer(CallingConvention.StdCall, SetLastError = true)]
         private delegate int FillRectDelegate(IntPtr hdc, ref RECT lprc, IntPtr hbr);
 
         private static FillRectDelegate _fillRectOriginal;
         private static LocalHook _fillRectHook;
-        private static int _fillRectLogCount = 0;
 
         private static int FillRect_Hooked(IntPtr hdc, ref RECT lprc, IntPtr hbr)
         {
             try
             {
+                // se for TStringGrid, não mexe em nada
+                if (IsInsideTStringGrid(hdc))
+                    return _fillRectOriginal(hdc, ref lprc, hbr);
+
                 if (hbr != IntPtr.Zero)
                 {
                     LOGBRUSH lb;
@@ -168,18 +196,8 @@ namespace ChangeBgPayload
                     {
                         uint color = lb.lbColor & 0x00FFFFFFu;
 
-                        // Loga as primeiras chamadas pra ver o que está acontecendo
-                        if (_fillRectLogCount < 200)
-                        {
-                            _fillRectLogCount++;
-                            System.IO.File.AppendAllText(
-                                @"C:\temp\payload_fillrect_log.txt",
-                                DateTime.Now.ToString("s") + $" FillRect color=0x{color:X6}" + Environment.NewLine
-                            );
-                        }
-
-                        // Se for branco / quase branco, troca pelo bege
-                        if (color == 0x00FFFFFFu   // branco puro
+                        // troca branco / quase branco pelo bege global
+                        if (color == 0x00FFFFFFu   // branco
                             || color == 0x00FCFCFCu
                             || color == 0x00F0F0F0u)
                         {
@@ -196,7 +214,7 @@ namespace ChangeBgPayload
             return _fillRectOriginal(hdc, ref lprc, hbr);
         }
 
-        // ===== Hook de SetBkColor (branco -> bege, inclusive para ExtTextOut/ETO_OPAQUE) =====
+        // ===== Hook de SetBkColor (branco -> bege, exceto TStringGrid) =====
         [UnmanagedFunctionPointer(CallingConvention.StdCall, SetLastError = true)]
         private delegate uint SetBkColorDelegate(IntPtr hdc, uint crColor);
 
@@ -207,6 +225,9 @@ namespace ChangeBgPayload
         {
             try
             {
+                if (IsInsideTStringGrid(hdc))
+                    return _setBkColorOriginal(hdc, crColor);
+
                 uint c = crColor & 0x00FFFFFFu;
                 if (c == 0x00FFFFFFu || c == 0x00FCFCFCu || c == 0x00F0F0F0u)
                 {
@@ -244,6 +265,7 @@ namespace ChangeBgPayload
                     new GetSysColorDelegate(GetSysColor_Hooked),
                     null);
 
+                // aplica a todas as threads (Exclusive com 0 é o padrão dos samples)
                 _getSysColorHook.ThreadACL.SetExclusiveACL(new int[] { 0 });
 
                 Log("Hook GetSysColor instalado com sucesso");

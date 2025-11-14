@@ -1,0 +1,31 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.14.36518.9 d17.14
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "InjectorApp", "InjectorApp\InjectorApp.csproj", "{3C01B7BB-A7B6-4600-93BF-421B23132C08}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ChangeBgPayload", "ChangeBgPayload\ChangeBgPayload.csproj", "{F52198B9-7FD5-44B3-81E7-333E84E59B4E}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{3C01B7BB-A7B6-4600-93BF-421B23132C08}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3C01B7BB-A7B6-4600-93BF-421B23132C08}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3C01B7BB-A7B6-4600-93BF-421B23132C08}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3C01B7BB-A7B6-4600-93BF-421B23132C08}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F52198B9-7FD5-44B3-81E7-333E84E59B4E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F52198B9-7FD5-44B3-81E7-333E84E59B4E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F52198B9-7FD5-44B3-81E7-333E84E59B4E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F52198B9-7FD5-44B3-81E7-333E84E59B4E}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {83E2545A-DA3D-401F-AAEB-5F98501C8CB5}
+	EndGlobalSection
+EndGlobal

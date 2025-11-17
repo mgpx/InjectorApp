@@ -47,6 +47,7 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="MenuManager.cs" />
     <Compile Include="Payload.cs" />
     <Compile Include="Payload2.cs" />
     <Compile Include="Payload_ok_v1.cs" />

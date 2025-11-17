@@ -109,5 +109,11 @@
     </Content>
     <Content Include="icon.ico" />
   </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\ChangeBgPayload\ChangeBgPayload.csproj">
+      <Project>{f52198b9-7fd5-44b3-81e7-333e84e59b4e}</Project>
+      <Name>ChangeBgPayload</Name>
+    </ProjectReference>
+  </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

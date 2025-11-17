@@ -30,6 +30,22 @@ namespace ChangeBgPayload
             public uint lbColor; // COLORREF 0x00BBGGRR
             public IntPtr lbHatch;
         }
+
+        // ===== Color Dialog (ChooseColor) =====
+        [StructLayout(LayoutKind.Sequential)]
+        private struct CHOOSECOLOR
+        {
+            public int lStructSize;
+            public IntPtr hwndOwner;
+            public IntPtr hInstance;
+            public uint rgbResult;
+            public IntPtr lpCustColors;
+            public uint Flags;
+            public IntPtr lCustData;
+            public IntPtr lpfnHook;
+            public IntPtr lpTemplateName;
+        }
+
         private const int GWL_WNDPROC = -4;
         private const int GCLP_HBRBACKGROUND = -10;
         private const int WS_CLIPCHILDREN = 0x02000000;
@@ -40,6 +56,15 @@ namespace ChangeBgPayload
         private const int TRANSPARENT = 1;
         private const int RGN_DIFF = 4;
         private const int GWL_STYLE = -16;
+        private const int WM_COMMAND = 0x0111;
+        private const uint CC_RGBINIT = 0x00000001;
+        private const uint CC_FULLOPEN = 0x00000002;
+
+
+        [DllImport("comdlg32.dll", CharSet = CharSet.Unicode, SetLastError = true, EntryPoint = "ChooseColorW")]
+        private static extern bool ChooseColorW(ref CHOOSECOLOR cc);
+
+        
         [DllImport("user32.dll")] static extern bool EnumWindows(EnumWindowsProc cb, IntPtr l);
         [DllImport("user32.dll")] static extern bool EnumChildWindows(IntPtr p, EnumWindowsProc cb, IntPtr l);
         [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
@@ -67,6 +92,14 @@ namespace ChangeBgPayload
         [DllImport("gdi32.dll")] static extern uint SetBkColor(IntPtr hdc, uint crColor);
         [DllImport("user32.dll")] static extern IntPtr WindowFromDC(IntPtr hdc);
         [DllImport("user32.dll")] static extern IntPtr GetParent(IntPtr hWnd);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "MessageBoxW")]
+        private static extern int MessageBoxW(
+    IntPtr hWnd,
+    string lpText,
+    string lpCaption,
+    uint uType);
+
         // Get/SetWindowLong compat
         [DllImport("user32.dll", EntryPoint = "GetWindowLong")] static extern int GetWindowLong32(IntPtr h, int i);
         [DllImport("user32.dll", EntryPoint = "GetWindowLongPtr")] static extern IntPtr GetWindowLongPtr64(IntPtr h, int i);
@@ -80,6 +113,8 @@ namespace ChangeBgPayload
         => IntPtr.Size == 8 ? SetWindowLongPtr64(h, i, v) : new IntPtr(SetWindowLong32(h, i, v.ToInt32()));
         static IntPtr SetClassBrushCompat(IntPtr h, int i, IntPtr v)
         => IntPtr.Size == 8 ? SetClassLongPtr64(h, i, v) : SetClassLong32(h, i, v);
+        private static int LOWORD(IntPtr value)
+            => (int)((long)value & 0xFFFF);
         // ===== Estado geral =====
         private static uint s_color = 0xFFF5E6; // COLORREF 0x00BBGGRR (begezinho)
         private static IntPtr s_brush = IntPtr.Zero;
@@ -105,6 +140,10 @@ namespace ChangeBgPayload
 "TSPEEDBUTTON", "TTOOLBAR", "TSTATUSBAR", "TMAINMENU"
 };
         private readonly uint _myPid = (uint)Process.GetCurrentProcess().Id;
+
+        // buffer estático para as 16 cores personalizadas do ChooseColor
+        private static IntPtr s_customColors = IntPtr.Zero;
+
         // flag por thread: estamos processando mensagem de um TFRel?
         [ThreadStatic]
         private static bool s_inTFRelPaint;
@@ -277,6 +316,9 @@ namespace ChangeBgPayload
             IntPtr first = WaitForTopLevelForm();
             if (first == IntPtr.Zero) { Log("Form não encontrado"); return; }
             HookTopLevel(first);
+
+            //MenuManager.EnsureAjustesMenu(first, Log);
+
             int cycle = 0;
             while (true)
             {
@@ -303,6 +345,13 @@ namespace ChangeBgPayload
                         if (!IsWindowVisible(h)) return true;
                         GetWindowThreadProcessId(h, out uint pid);
                         if (pid != _myPid) return true;
+
+
+                        // garante que o top-level esteja hookado
+                        HookTopLevel(h);
+
+                        // Garante que esse top-level tenha o menu Ajustes, se tiver menu principal
+                        MenuManager.EnsureAjustesMenu(h, Log);
 
                         string cls = GetCls(h).ToUpperInvariant();
                         if (cls.Contains("FREL")) // cobre TFRel, TfrPreview, TFRelPreview, etc.
@@ -373,6 +422,8 @@ namespace ChangeBgPayload
                 if (p != pid) return true;
                 string cls = GetCls(h).ToUpperInvariant();
                 if (cls == "TAPPLICATION") return true;
+
+
                 if ((cls.StartsWith("TFORM") || cls.StartsWith("TFR") || cls.Contains("TFRINTERATIVO") || cls.StartsWith("TFREL")) && HasCaption(h))
                 {
                     result = h;
@@ -559,7 +610,8 @@ namespace ChangeBgPayload
             DeleteObject(rgn);
         }
         // ===== WndProc =====
-        private IntPtr HookedProc(IntPtr h, uint msg, IntPtr w, IntPtr l)
+        private const int IDM_CONFIG_COR = 0x9001;
+        private IntPtr HookedProc(IntPtr h, uint msg, IntPtr w, IntPtr l)
         {
             try
             {
@@ -567,6 +619,26 @@ namespace ChangeBgPayload
                     return CallWindowProc(old, h, msg, w, l);
 
                 if (!IsWindow(h)) return IntPtr.Zero;
+
+                // Trata comandos de menu antes de qualquer lógica de pintura
+                if (msg == WM_COMMAND)
+                {
+                    int raw = LOWORD(w);              // agora vindo como 0..65535
+                    ushort cmd = (ushort)raw;         // 16 bits sem sinal
+
+                    Log($"WM_COMMAND em hwnd=0x{h.ToInt64():X} cls={GetCls(h)} id={raw} (0x{cmd:X4})");
+
+                    if (cmd == IDM_CONFIG_COR)        // IDM_CONFIG_COR = 0x9001
+                    {
+                        Log("WM_COMMAND de Config Cor capturado");
+                        //MessageBoxW(h, "Você clicou", "Config Cor", 0);
+                        ShowColorDialogAndSave(h);
+                        return IntPtr.Zero; // já tratamos
+                    }
+                }
+
+
+
                 string cls = GetCls(h).ToUpperInvariant();
                 bool isTFRel = cls.StartsWith("TFREL");
                 // TFRel: não mexe em nada, só marca a flag de que estamos dentro dele
@@ -628,5 +700,89 @@ namespace ChangeBgPayload
                 return IntPtr.Zero;
             }
         }
+
+
+        private void ShowColorDialogAndSave(IntPtr owner)
+        {
+            try
+            {
+                // Inicializa o buffer de cores personalizadas uma vez
+                if (s_customColors == IntPtr.Zero)
+                {
+                    s_customColors = Marshal.AllocHGlobal(sizeof(uint) * 16);
+                    for (int i = 0; i < 16; i++)
+                    {
+                        // inicializa como branco
+                        Marshal.WriteInt32(s_customColors, i * 4, unchecked((int)0x00FFFFFF));
+                    }
+                }
+
+                CHOOSECOLOR cc = new CHOOSECOLOR();
+                cc.lStructSize = Marshal.SizeOf<CHOOSECOLOR>();
+                cc.hwndOwner = owner;
+                cc.hInstance = IntPtr.Zero;
+                cc.rgbResult = s_color;          // cor atual (COLORREF 0x00BBGGRR)
+                cc.lpCustColors = s_customColors;
+                cc.Flags = CC_RGBINIT | CC_FULLOPEN;
+
+                if (!ChooseColorW(ref cc))
+                {
+                    // usuário cancelou
+                    return;
+                }
+
+                uint chosen = cc.rgbResult & 0x00FFFFFFu;
+
+                // Salva no arquivo para manter compatibilidade com sua lógica existente
+                SaveColorToFile(chosen);
+
+                // Já aplica imediatamente na memória também (sem esperar o loop)
+                if (chosen != s_color)
+                {
+                    s_color = chosen;
+
+                    if (s_brush != IntPtr.Zero)
+                        DeleteObject(s_brush);
+
+                    s_brush = CreateSolidBrush(s_color);
+
+                    _classBrushApplied.Clear();
+
+                    foreach (var root in _hookedTopLevels.Where(IsWindow).ToList())
+                        InvalidateRect(root, IntPtr.Zero, true);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log("Erro ao exibir color dialog: " + ex);
+            }
+        }
+
+        private void SaveColorToFile(uint color)
+        {
+            try
+            {
+                string path = @"C:\temp\bg_color.txt";
+
+                int r = (int)(color & 0xFF);
+                int g = (int)((color >> 8) & 0xFF);
+                int b = (int)((color >> 16) & 0xFF);
+
+                string hex = $"{r:X2}{g:X2}{b:X2}"; // mesmo formato que você lê: RRGGBB
+
+                var dir = System.IO.Path.GetDirectoryName(path);
+                if (!string.IsNullOrEmpty(dir) && !System.IO.Directory.Exists(dir))
+                    System.IO.Directory.CreateDirectory(dir);
+
+                System.IO.File.WriteAllText(path, hex);
+
+                Log($"Cor salva em arquivo: {hex}");
+            }
+            catch (Exception ex)
+            {
+                Log("Erro ao salvar cor em arquivo: " + ex);
+            }
+        }
+
     }
 }

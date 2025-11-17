@@ -408,13 +408,14 @@ namespace ChangeBgPayload
                         if (IsWindow(root))
                         {
                             ScanAndHookAllFrom(root);
-                            InvalidateRect(root, IntPtr.Zero, false);
+                            //desabilita para evitar o "flicker"
+                            //InvalidateRect(root, IntPtr.Zero, false);
                         }
                         else _hookedTopLevels.Remove(root);
                     }
                 }
                 catch (Exception ex) { Log("Loop error: " + ex); }
-                Thread.Sleep(800);
+                Thread.Sleep(1200);
             }
         }
         // ====================== FUNÇÕES AUXILIARES ======================

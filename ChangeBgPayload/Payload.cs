@@ -61,6 +61,12 @@ namespace ChangeBgPayload
         private const uint CC_FULLOPEN = 0x00000002;
 
 
+        private const int WM_SETTEXT = 0x000C;
+        private const int WM_KEYDOWN = 0x0100;
+        private const int WM_KEYUP = 0x0101;
+        private const int VK_RETURN = 0x0D;
+
+
         [DllImport("comdlg32.dll", CharSet = CharSet.Unicode, SetLastError = true, EntryPoint = "ChooseColorW")]
         private static extern bool ChooseColorW(ref CHOOSECOLOR cc);
 
@@ -94,11 +100,16 @@ namespace ChangeBgPayload
         [DllImport("user32.dll")] static extern IntPtr GetParent(IntPtr hWnd);
 
         [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "MessageBoxW")]
-        private static extern int MessageBoxW(
-    IntPtr hWnd,
-    string lpText,
-    string lpCaption,
-    uint uType);
+        private static extern int MessageBoxW(IntPtr hWnd,string lpText,string lpCaption, uint uType);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern IntPtr SendMessage(IntPtr hWnd, int Msg, IntPtr wParam, string lParam);
+
+        [DllImport("user32.dll")]
+        private static extern bool PostMessage(IntPtr hWnd, int Msg, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr SetFocus(IntPtr hWnd);
 
         // Get/SetWindowLong compat
         [DllImport("user32.dll", EntryPoint = "GetWindowLong")] static extern int GetWindowLong32(IntPtr h, int i);
@@ -143,6 +154,9 @@ namespace ChangeBgPayload
 
         // buffer estático para as 16 cores personalizadas do ChooseColor
         private static IntPtr s_customColors = IntPtr.Zero;
+
+        // auto-login
+        private static bool s_autoLoginDone = false;
 
         // flag por thread: estamos processando mensagem de um TFRel?
         [ThreadStatic]
@@ -352,6 +366,9 @@ namespace ChangeBgPayload
 
                         // Garante que esse top-level tenha o menu Ajustes, se tiver menu principal
                         MenuManager.EnsureAjustesMenu(h, Log);
+
+                        // Tenta auto-login se for o TFrLogin
+                        TryAutoLoginIfLoginForm(h);
 
                         string cls = GetCls(h).ToUpperInvariant();
                         if (cls.Contains("FREL")) // cobre TFRel, TfrPreview, TFRelPreview, etc.
@@ -626,7 +643,7 @@ namespace ChangeBgPayload
                     int raw = LOWORD(w);              // agora vindo como 0..65535
                     ushort cmd = (ushort)raw;         // 16 bits sem sinal
 
-                    Log($"WM_COMMAND em hwnd=0x{h.ToInt64():X} cls={GetCls(h)} id={raw} (0x{cmd:X4})");
+                    //Log($"WM_COMMAND em hwnd=0x{h.ToInt64():X} cls={GetCls(h)} id={raw} (0x{cmd:X4})");
 
                     if (cmd == IDM_CONFIG_COR)        // IDM_CONFIG_COR = 0x9001
                     {
@@ -768,7 +785,7 @@ namespace ChangeBgPayload
                 int g = (int)((color >> 8) & 0xFF);
                 int b = (int)((color >> 16) & 0xFF);
 
-                string hex = $"{r:X2}{g:X2}{b:X2}"; // mesmo formato que você lê: RRGGBB
+                string hex = $"{r:X2}{g:X2}{b:X2}"; // mesmo formato: RRGGBB
 
                 var dir = System.IO.Path.GetDirectoryName(path);
                 if (!string.IsNullOrEmpty(dir) && !System.IO.Directory.Exists(dir))
@@ -781,6 +798,81 @@ namespace ChangeBgPayload
             catch (Exception ex)
             {
                 Log("Erro ao salvar cor em arquivo: " + ex);
+            }
+        }
+
+        private void TryAutoLoginIfLoginForm(IntPtr hLogin)
+        {
+            try
+            {
+                if (s_autoLoginDone) return;
+                if (!IsWindow(hLogin)) return;
+
+                string cls = GetCls(hLogin).ToUpperInvariant();
+                if (cls != "TFRLOGIN")
+                    return;
+
+                Log($"AutoLogin: detectado TFrLogin hwnd=0x{hLogin.ToInt64():X}");
+
+                IntPtr hUser = IntPtr.Zero;
+                IntPtr hPass = IntPtr.Zero;
+
+                // procura os TSQLEd pelos estilos que você passou
+                EnumChildWindows(hLogin, (child, _) =>
+                {
+                    if (!IsWindow(child) || !IsWindowVisible(child)) return true;
+
+                    string ccls = GetCls(child).ToUpperInvariant();
+                    if (ccls != "TSQLED")
+                        return true;
+
+                    long styleLong = GetWindowLongCompat(child, GWL_STYLE).ToInt64();
+                    uint style = (uint)(styleLong & 0xFFFFFFFF);
+
+                    // estilos
+                    // usuário: 0x540000C2
+                    // senha:   0x540000E8
+                    if (style == 0x540000C2 && hUser == IntPtr.Zero)
+                    {
+                        hUser = child;
+                        Log($"AutoLogin: TSQLEd usuário encontrado hwnd=0x{child.ToInt64():X} style=0x{style:X8}");
+                    }
+                    else if (style == 0x540000E8 && hPass == IntPtr.Zero)
+                    {
+                        hPass = child;
+                        Log($"AutoLogin: TSQLEd senha encontrado   hwnd=0x{child.ToInt64():X} style=0x{style:X8}");
+                    }
+
+                    return true;
+                }, IntPtr.Zero);
+
+                if (hUser == IntPtr.Zero || hPass == IntPtr.Zero)
+                {
+                    Log("AutoLogin: não encontrou todos os edits (user/senha). Abortando.");
+                    return;
+                }
+
+                // <<< USUÁRIO E SENHA FIXOS>>>
+                const string USERNAME = "9999";
+                const string PASSWORD = "INTERATIVO";
+
+                SendMessage(hUser, WM_SETTEXT, IntPtr.Zero, USERNAME);
+                SendMessage(hPass, WM_SETTEXT, IntPtr.Zero, PASSWORD);
+
+                // foca no campo senha
+                SetFocus(hPass);
+
+                // simula Enter no campo senha
+                //deixa desabilitado por enquanto
+                //PostMessage(hPass, WM_KEYDOWN, (IntPtr)VK_RETURN, IntPtr.Zero);
+                //PostMessage(hPass, WM_KEYUP, (IntPtr)VK_RETURN, IntPtr.Zero);
+
+                s_autoLoginDone = true;
+                Log("AutoLogin: usuário/senha preenchidos e Enter enviado.");
+            }
+            catch (Exception ex)
+            {
+                Log("AutoLogin error: " + ex);
             }
         }
 

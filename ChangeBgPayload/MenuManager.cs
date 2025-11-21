@@ -82,7 +82,7 @@ namespace ChangeBgPayload
                     continue;
 
                 string text = sb.ToString().Trim('&').Trim();
-                if (text.Equals("AJUSTES", StringComparison.OrdinalIgnoreCase))
+                if (text.Equals("🛠️ AJUSTES", StringComparison.OrdinalIgnoreCase))
                     return true;
             }
 
@@ -139,7 +139,7 @@ namespace ChangeBgPayload
                     hMainMenu,
                     MF_STRING | MF_POPUP,
                     subHandle,
-                    "Ajustes"))
+                    "🛠️ Ajustes"))
                 {
                     log?.Invoke("Falha ao adicionar menu top-level 'Ajustes'");
                     return;
